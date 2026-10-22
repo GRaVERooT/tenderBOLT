@@ -1,0 +1,28 @@
+name: Verify tenderBOLT static MVP
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check required files
+        run: |
+          test -s index.html
+          test -s styles.css
+          test -s app.js
+          test -s MANUAL.md
+      - name: Check JavaScript syntax
+        run: node --check app.js
+      - name: Check six-stage UI labels
+        run: |
+          grep -q 'Источники' app.js
+          grep -q 'Сбор лотов' app.js
+          grep -q 'Анализ ТЗ' app.js
+          grep -q 'Отбор' app.js
+          grep -q 'Предложение' app.js
+          grep -q 'Контроль' app.js

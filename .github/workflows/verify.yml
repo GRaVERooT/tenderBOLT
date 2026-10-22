@@ -20,9 +20,17 @@ jobs:
         run: node --check app.js
       - name: Check six-stage UI labels
         run: |
-          grep -q 'Источники' app.js
+          grep -q 'Обзор' app.js
+          grep -q 'Подключение к источникам' app.js
           grep -q 'Сбор лотов' app.js
           grep -q 'Анализ ТЗ' app.js
           grep -q 'Отбор' app.js
           grep -q 'Предложение' app.js
           grep -q 'Контроль' app.js
+      - name: Check Goszakup links, AI prompt, and no synthetic fixtures
+        run: |
+          grep -q 'lotUrl' app.js
+          grep -q 'tzUrl' app.js
+          grep -q 'promptFor' app.js
+          grep -q 'indexedDB.open' app.js
+          ! grep -q 'function seedLots' app.js

@@ -19,10 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Enable and configure Pages
+      - name: Configure Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - name: Upload static application
         uses: actions/upload-pages-artifact@v3
         with:

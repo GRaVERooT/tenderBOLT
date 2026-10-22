@@ -1,0 +1,156 @@
+/* tenderBOLT MVP — local-first demo; no API calls, no backend or secure authentication. */
+(function () {
+  "use strict";
+  var KEY = "tenderbolt_demo_v1";
+  var SESSION = "tenderbolt_demo_session";
+  var DEMO_USER = "demo@tenderbolt.kz";
+  var DEMO_PASS = "Bolt2026!";
+  var steps = ["Источники", "Сбор лотов", "Анализ ТЗ", "Отбор", "Предложение", "Контроль"];
+  var statuses = {new:"Новый",selected:"Отобран",rejected:"Отклонён",preparing:"Подготовка",submitted:"Подано",won:"Победа",lost:"Проигрыш"};
+  var ui = {stage:0,query:"",status:"all",addOpen:false,csvOpen:false,loginError:""};
+  var root = document.getElementById("app");
+  function esc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});
+  }
+  function currency(v) {return Number(v||0).toLocaleString("ru-RU",{maximumFractionDigits:0})+" ₸";}
+  function day(s) {if (!s) return "—"; var d=new Date(String(s)+"T12:00:00");return isNaN(d.valueOf())?"—":d.toLocaleDateString("ru-RU");}
+  function daysUntil(s){var a=new Date();a.setHours(0,0,0,0);var b=new Date(String(s)+"T00:00:00");return Math.ceil((b-a)/86400000);}
+  function uid(){return "l"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
+  function seedLots(ws) {
+    var items=[
+      ["DEMO-001","Поставка межсетевых экранов для учебной сети","Учебный заказчик А",25000000,"2026-11-17","Госзакуп РК"],
+      ["DEMO-002","Лицензии антивирусной защиты рабочих станций","Учебный заказчик Б",9400000,"2026-11-05","Госзакуп РК"],
+      ["DEMO-003","Внедрение системы мониторинга событий ИБ","Учебный заказчик В",68000000,"2026-12-02","Самрук-Казына"],
+      ["DEMO-004","Поставка серверного оборудования","Учебный заказчик Г",43000000,"2026-11-28","Госзакуп РК"],
+      ["DEMO-005","Канцелярские товары для офиса","Учебный заказчик Д",730000,"2026-11-07","Госзакуп РК"],
+      ["DEMO-006","Аудит информационной безопасности инфраструктуры","Учебный заказчик Е",12500000,"2026-11-24","Самрук-Казына"],
+      ["DEMO-007","Техническая поддержка корпоративной сети","Учебный заказчик Ж",17600000,"2026-12-12","Госзакуп РК"],
+      ["DEMO-008","Услуги клининга офисных помещений","Учебный заказчик З",1800000,"2026-11-10","Другой источник"]
+    ];
+    return items.map(function(x){return {id:uid(),number:x[0],title:x[1],customer:x[2],budget:x[3],deadline:x[4],source:x[5],workspace:ws,status:"new",note:"",cost:0,checks:{},demo:true};});
+  }
+  function fresh() {
+    return {activeWorkspace:"main",workspaces:[{id:"main",name:"Мой первый проект",keywords:"информационная безопасность, межсетевой экран, аудит, мониторинг, антивирус, сеть",minBudget:1000000,maxBudget:100000000}],sources:[{id:"gos",name:"Госзакуп РК",detail:"Коннектор к официальным государственным закупкам",enabled:true},{id:"sk",name:"Самрук-Казына",detail:"Планируемый коннектор корпоративных закупок",enabled:false},{id:"other",name:"Другие площадки",detail:"Ручной CSV-импорт и будущие интеграции",enabled:true}],lots:seedLots("main")};
+  }
+  function load() {
+    try {var v=JSON.parse(localStorage.getItem(KEY));if(v&&Array.isArray(v.workspaces)&&Array.isArray(v.lots)&&Array.isArray(v.sources)&&v.workspaces.length)return v;}catch(e){}
+    return fresh();
+  }
+  var state=load();
+  function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){toast("Не удалось сохранить данные: проверьте место в браузере.");}}
+  function activeWs(){return state.workspaces.find(function(w){return w.id===state.activeWorkspace;})||state.workspaces[0];}
+  function lots(){return state.lots.filter(function(l){return l.workspace===activeWs().id;});}
+  function lotById(id){return state.lots.find(function(l){return l.id===id&&l.workspace===activeWs().id;});}
+  function shortlist(l){return ["selected","preparing","submitted","won","lost"].indexOf(l.status)>=0;}
+  function tag(status){var color={new:"blue",selected:"green",rejected:"red",preparing:"amber",submitted:"blue",won:"green",lost:"red"}[status]||"";return '<span class="tag '+color+'">'+esc(statuses[status]||status)+'</span>';}
+  function btn(label,action,id,css){return '<button type="button" class="btn btn-sm '+(css||"btn-secondary")+'" data-action="'+esc(action)+'"'+(id?' data-id="'+esc(id)+'"':'')+'>'+esc(label)+'</button>';}
+  function stat(label,value,foot){return '<div class="stat"><div class="stat-label">'+esc(label)+'</div><div class="stat-value">'+esc(value)+'</div><div class="stat-foot">'+esc(foot)+'</div></div>';}
+  function stats(){var ls=lots();return '<div class="grid stats">'+stat("Всего лотов",ls.length,"В текущем пространстве")+stat("В работе",ls.filter(shortlist).length,"Отобранные и активные")+stat("Подано",ls.filter(function(l){return ["submitted","won","lost"].indexOf(l.status)>=0;}).length,"Из текущего пространства")+stat("Объём лотов",currency(ls.reduce(function(n,l){return n+Number(l.budget||0);},0)),"Демонстрационные суммы")+'</div>';}
+  function shell(){
+    var nav=steps.map(function(s,i){return '<button type="button" data-action="stage" data-stage="'+i+'" class="'+(i===ui.stage?"active":"")+'"><span class="nav-num">'+(i+1)+'</span>'+esc(s)+'</button>';}).join("");
+    var ws=state.workspaces.map(function(w){return '<option value="'+esc(w.id)+'"'+(w.id===activeWs().id?' selected':'')+'>'+esc(w.name)+'</option>';}).join("");
+    return '<div class="shell"><aside class="sidebar"><div class="brand">tender<span class="bolt">BOLT</span></div><div class="brand-note">Tender intelligence workspace</div><div class="sidebar-section">ПРОЦЕСС ЗАКУПОК</div><nav class="nav" aria-label="Шесть этапов">'+nav+'</nav><div class="sidebar-bottom">Версия MVP · DEMO<br>Данные только в этом браузере<br>'+btn("Выйти","logout","","btn-ghost")+'</div></aside><div class="main"><header class="topbar"><div class="topbar-left"><span class="small muted">Рабочее пространство</span><select class="workspace-select" id="workspace" aria-label="Выберите пространство">'+ws+'</select>'+btn("+ Новое","new-workspace","","btn-ghost")+'</div><div class="topbar-actions"><span class="pill">● DEMO / offline</span><span class="muted small">demo</span><span class="avatar">TB</span><span class="mobile-only">'+btn("Выход","logout","","btn-ghost")+'</span></div></header><main class="content"><div class="page-heading"><div><div class="eyebrow">ЭТАП '+(ui.stage+1)+' / 6</div><h1>'+esc(steps[ui.stage])+'</h1><p>'+esc(["Источники и параметры получения тендеров","Единая база лотов и первичный поиск","Прозрачный скоринг по критериям","Решения по участию в закупках","Подготовка заявки и оценка маржи","Сроки и жизненный цикл заявки"][ui.stage])+'</p></div><div class="actions">'+btn("Экспорт CSV","export-csv","","btn-ghost")+btn("Бэкап JSON","export-json","","btn-ghost")+'</div></div><div class="notice"><strong>Демонстрационный MVP.</strong> Лоты с номером DEMO — вымышленные. Автоматическое получение закупок по API, серверная авторизация, совместная работа и уведомления ещё не реализованы. Все правки хранятся локально в вашем браузере; не используйте для конфиденциальных данных.</div>'+stats()+[stageSources,stageLots,stageAnalysis,stageSelection,stageOffers,stageControl][ui.stage]()+'<p class="footer">tenderBOLT v0.1 · Казахстан · GitHub Pages demo · <a href="./MANUAL.md" target="_blank" rel="noopener">Мануал</a></p></main></div></div>';
+  }
+  function loginPage(){
+    return '<div class="login-shell"><section class="login-hero"><div class="brand">tender<span class="bolt">BOLT</span></div><div class="brand-note">Tender intelligence workspace</div><h1>Управляйте тендерами. От поиска до результата.</h1><p>Шесть связанных этапов в одном пространстве: источники, лоты, анализ, отбор, предложение и контроль. Статический прототип для проверки процессов.</p><div class="hero-steps"><span>01 · Источники</span><span>02 · Сбор</span><span>03 · Анализ</span><span>04 · Отбор</span><span>05 · Заявка</span><span>06 · Контроль</span></div></section><div class="login-side"><div class="login-card"><div class="eyebrow">ДЕМО-ДОСТУП</div><h2>Войти в рабочее пространство</h2><p class="muted small">Тестовый вход без серверной проверки личности.</p><div class="hint"><strong>Демонстрационные реквизиты</strong><br>Логин: <code>'+DEMO_USER+'</code><br>Пароль: <code>'+DEMO_PASS+'</code><br>Это публичные демоданные, а не защищённая учётная запись.</div><form data-form="login"><div><label class="label" for="email">Email</label><input class="field" id="email" name="email" type="email" autocomplete="username" required value="'+DEMO_USER+'"></div><div><label class="label" for="password">Пароль</label><input class="field" id="password" name="password" type="password" autocomplete="current-password" required placeholder="Введите демопароль"></div><div class="error" role="alert">'+esc(ui.loginError)+'</div><button class="btn btn-primary btn-block" type="submit">Открыть демо →</button></form><p class="help">Для реальных пользователей потребуется отдельный backend с сессиями и базой данных. Не вводите настоящие пароли.</p></div></div></div>';
+  }
+  function stageSources(){
+    var cards=state.sources.map(function(s){return '<article class="source-card"><div class="source-top"><span class="tag '+(s.enabled?"green":"")+'">'+(s.enabled?"Включён":"Выключен")+'</span><label class="switch"><input type="checkbox" data-source="'+esc(s.id)+'"'+(s.enabled?" checked":"")+'>Показывать</label></div><h3>'+esc(s.name)+'</h3><p>'+esc(s.detail)+'</p><div class="help">Интеграция: не подключена · режим ручного импорта</div></article>';}).join("");
+    return '<section class="panel"><h2>Площадки для мониторинга</h2><p class="panel-desc">Тумблеры сохраняют только настройки интерфейса. Они не запускают фоновые задачи и не обращаются к площадкам.</p><div class="source-grid">'+cards+'</div></section><div class="columns"><section class="panel"><h2>Поток данных</h2><p class="panel-desc">Рабочая демонстрация на учебных записях. Импорт пользовательского CSV выполняется на этапе «Сбор лотов».</p>'+btn("Перейти к сбору →","goto-lots","","btn-primary")+'</section><section class="panel"><h2>Планируемый промышленный коннектор</h2><p class="panel-desc">API/официальные выгрузки → сервис нормализации → БД → фильтрация → очередь анализа. Нужны сервер, ключи и проверка правил площадок.</p><span class="tag amber">В дорожной карте</span></section></div>';
+  }
+  function lotActions(l){return '<div class="actions">'+(l.status==="new"||l.status==="rejected"?btn("Отобрать","select",l.id,"btn-secondary"):"")+(l.status!=="rejected"?btn("Отклонить","reject",l.id,"btn-ghost"):btn("Вернуть","reset",l.id,"btn-ghost"))+'</div>';}
+  function stageLots(){
+    var q=ui.query.toLowerCase(),filtered=lots().filter(function(l){return (ui.status==="all"||ui.status===l.status)&&(!q||[l.title,l.customer,l.number,l.source].some(function(s){return String(s).toLowerCase().includes(q);}));});
+    var options='<option value="all">Все статусы</option>'+Object.keys(statuses).map(function(s){return '<option value="'+s+'"'+(ui.status===s?" selected":"")+'>'+statuses[s]+'</option>';}).join("");
+    var rows=filtered.map(function(l){return '<tr><td class="nowrap"><strong>'+esc(l.number)+'</strong><div class="sub">'+esc(l.source)+'</div></td><td><div class="lot-name">'+esc(l.title)+'</div><div class="sub">'+esc(l.customer)+'</div></td><td class="nowrap">'+currency(l.budget)+'</td><td class="nowrap">'+day(l.deadline)+'</td><td>'+tag(l.status)+'</td><td>'+lotActions(l)+'</td></tr>';}).join("");
+    var add=ui.addOpen?'<section class="panel"><h2>Добавить лот вручную</h2><form class="form-grid" data-form="add-lot"><div><label class="label">Номер лота</label><input name="number" class="field" required maxlength="70" placeholder="LOT-2026-001"></div><div><label class="label">Источник</label><input name="source" class="field" required maxlength="80" placeholder="Госзакуп РК"></div><div class="wide"><label class="label">Предмет закупки</label><input name="title" class="field" required maxlength="250"></div><div><label class="label">Заказчик</label><input name="customer" class="field" required maxlength="150"></div><div><label class="label">Бюджет, ₸</label><input name="budget" class="field" type="number" min="0" max="1000000000000" step="1" required></div><div><label class="label">Срок подачи</label><input name="deadline" class="field" type="date" required></div><button class="btn btn-primary" type="submit">Сохранить лот</button></form></section>':"";
+    var csv=ui.csvOpen?'<section class="panel"><h2>Импорт CSV</h2><p class="panel-desc">Один лот на строку. Заголовки: <code>number;title;customer;budget;deadline;source</code>. Разделитель «;» (или «,»). Даты: YYYY-MM-DD. Стандартное CSV-экранирование кавычками поддерживается.</p><textarea class="field" rows="6" id="csv-text" placeholder="number;title;customer;budget;deadline;source&#10;X-101;Аудит ИБ;Компания;1000000;2026-12-30;Ручной импорт"></textarea><div class="actions" style="margin-top:12px">'+btn("Импортировать","import-csv","","btn-primary")+'</div><p class="help">Импортируются только валидные строки. Для работы с Excel экспортируйте таблицу как CSV UTF-8.</p></section>':"";
+    return '<section class="panel"><div class="page-heading" style="margin-bottom:15px"><div><h2>Реестр закупок</h2><p class="panel-desc">Учебные записи и вручную загруженные лоты</p></div><div class="actions">'+btn("+ Лот","toggle-add","","btn-primary")+btn("Импорт CSV","toggle-csv","","btn-secondary")+'</div></div><form class="toolbar" data-form="search"><div class="search"><label class="label">Поиск</label><input id="lot-search" name="query" class="field" placeholder="Название, номер, заказчик…" value="'+esc(ui.query)+'"></div><div><label class="label">Статус</label><select name="status" class="field">'+options+'</select></div><button class="btn btn-secondary" type="submit">Найти</button>'+btn("Сбросить","reset-search","","btn-ghost")+'</form><div class="table-wrap"><table><thead><tr><th>Номер / источник</th><th>Лот / заказчик</th><th>Бюджет</th><th>Дедлайн</th><th>Статус</th><th>Решение</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+(filtered.length?"":'<div class="empty"><strong>Лоты не найдены</strong>Измените фильтры или добавьте запись.</div>')+'<p class="help">Показано '+filtered.length+' из '+lots().length+' лотов. Источники настоящих данных не подключены.</p></section>'+add+csv;
+  }
+  function criteria(w){return String(w.keywords||"").split(",").map(function(x){return x.trim().toLowerCase();}).filter(Boolean);}
+  function analyze(l){
+    var w=activeWs(),tokens=criteria(w),t=(l.title+" "+l.customer).toLowerCase(),matched=tokens.filter(function(k){return t.indexOf(k)>=0;}),budget=Number(l.budget||0);
+    var min=Number(w.minBudget||0),max=Number(w.maxBudget||0),ok=budget>=min&&(max===0||budget<=max),left=daysUntil(l.deadline),score=Math.min(100,matched.length*23+(ok?20:0)+(left>=10?10:0));
+    return {score:score,matched:matched,ok:ok,left:left};
+  }
+  function stageAnalysis(){
+    var w=activeWs(),ls=lots().slice().sort(function(a,b){return analyze(b).score-analyze(a).score;});
+    var rows=ls.map(function(l){var a=analyze(l);return '<div class="analysis-row"><div><div class="lot-name">'+esc(l.title)+'</div><div class="sub">'+esc(l.number)+' · '+currency(l.budget)+' · '+(a.matched.length?"Совпадения: "+esc(a.matched.join(", ")):"Совпадений нет")+' · '+(a.ok?"Бюджет подходит":"Вне бюджета")+' · '+(a.left<0?"Срок истёк":a.left+" дн. до срока")+'</div><div class="progress"><i style="width:'+a.score+'%"></i></div></div><div class="score">'+a.score+'</div><div class="actions">'+(shortlist(l)?tag(l.status):btn("Отобрать","select",l.id,"btn-primary"))+'</div></div>';}).join("");
+    return '<div class="columns"><section class="panel"><h2>Критерии отбора</h2><p class="panel-desc">Скоринг прозрачный, по словам в названии и ограничениям бюджета. ИИ, разбор PDF/ТЗ и юридическая экспертиза пока не подключены.</p><form data-form="criteria" class="form-grid"><div class="wide"><label class="label">Ключевые фразы через запятую</label><textarea class="field" rows="4" name="keywords" required>'+esc(w.keywords)+'</textarea></div><div><label class="label">Мин. бюджет, ₸</label><input name="minBudget" type="number" min="0" class="field" value="'+Number(w.minBudget||0)+'"></div><div><label class="label">Макс. бюджет, ₸ (0 = нет предела)</label><input name="maxBudget" type="number" min="0" class="field" value="'+Number(w.maxBudget||0)+'"></div><button type="submit" class="btn btn-primary">Сохранить критерии</button></form></section><section class="panel"><h2>Модель оценки</h2><p class="panel-desc">За каждое совпадение ключевой фразы +23 балла, за подходящий бюджет +20, за срок от 10 дней +10. Максимум 100. Никаких скрытых рекомендаций: это правила демонстрационного прототипа.</p><div class="hint">Следующим шагом станет загрузка ТЗ, извлечение требований и формирование проверяемого объяснения оценки.</div></section></div><section class="panel"><h2>Ранжирование лотов</h2><p class="panel-desc">Отсортировано по вычисленной оценке (0–100).</p><div class="analysis-list">'+rows+'</div>'+(ls.length?"":'<div class="empty">Добавьте лоты, чтобы начать анализ.</div>')+'</section>';
+  }
+  function stageSelection(){
+    var chosen=lots().filter(shortlist),pending=lots().filter(function(l){return !shortlist(l)&&l.status!=="rejected";}),rejected=lots().filter(function(l){return l.status==="rejected";});
+    var chosenHtml=chosen.map(function(l){return '<div class="item-card"><div class="item-card-head"><div><h3>'+esc(l.title)+'</h3><p>'+esc(l.number)+' · '+currency(l.budget)+' · до '+day(l.deadline)+'</p><div class="sub">Заметка: '+esc(l.note||"не добавлена")+'</div></div>'+tag(l.status)+'</div><div class="actions">'+btn("Заметка","note",l.id,"btn-secondary")+btn("Вернуть в новые","reset",l.id,"btn-ghost")+btn("Отклонить","reject",l.id,"btn-danger")+'</div></div>';}).join("");
+    var available=pending.map(function(l){return '<div class="item-card"><div class="item-card-head"><div><h3>'+esc(l.title)+'</h3><p>'+esc(l.number)+' · оценка '+analyze(l).score+'/100</p></div>'+tag(l.status)+'</div><div class="actions">'+btn("В работу","select",l.id,"btn-primary")+btn("Отклонить","reject",l.id,"btn-ghost")+'</div></div>';}).join("");
+    return '<div class="columns"><section class="panel"><h2>В работе · '+chosen.length+'</h2><p class="panel-desc">Лоты, по которым принято решение участвовать.</p><div class="card-list">'+(chosenHtml||'<div class="empty">Пока ничего не отобрано</div>')+'</div></section><section class="panel"><h2>Очередь на решение · '+pending.length+'</h2><p class="panel-desc">Можно отправить лот в работу или отклонить.</p><div class="card-list">'+(available||'<div class="empty">Очередь пуста</div>')+'</div></section></div><section class="panel"><h2>Отклонено · '+rejected.length+'</h2><p class="panel-desc">'+(rejected.length?rejected.map(function(l){return esc(l.number)+" — "+esc(l.title);}).join("<br>"):"Отклонённых лотов нет.")+'</p></section>';
+  }
+  function stageOffers(){
+    var chosen=lots().filter(shortlist);
+    var rows=chosen.map(function(l){var cost=Number(l.cost||0),margin=l.budget?((l.budget-cost)/l.budget*100):0,checks=l.checks||{};return '<article class="quote"><div class="item-card-head"><div><div class="lot-name">'+esc(l.title)+'</div><div class="sub">'+esc(l.number)+' · бюджет '+currency(l.budget)+'</div></div>'+tag(l.status)+'</div><form data-form="quote" data-id="'+esc(l.id)+'"><div><label class="label">Себестоимость, ₸</label><input class="field" name="cost" type="number" min="0" max="1000000000000" step="1" required value="'+(cost||"")+'"></div><div><label class="label">Плановая валовая разница</label><div class="kpi">'+(cost?currency(l.budget-cost)+" · "+margin.toFixed(1)+"%":"Внесите себестоимость")+'</div></div><button class="btn btn-primary btn-sm" type="submit">Рассчитать</button></form><div class="actions" style="margin-top:14px"><label class="switch"><input type="checkbox" data-check="tech" data-id="'+esc(l.id)+'"'+(checks.tech?" checked":"")+'>ТЗ изучено</label><label class="switch"><input type="checkbox" data-check="docs" data-id="'+esc(l.id)+'"'+(checks.docs?" checked":"")+'>Документы собраны</label><label class="switch"><input type="checkbox" data-check="finance" data-id="'+esc(l.id)+'"'+(checks.finance?" checked":"")+'>Экономика согласована</label></div><div class="help" style="margin-top:10px">Чек-лист и калькуляция сохраняются локально. Файлы на ЭТП не подаются.</div></article>';}).join("");
+    return '<section class="panel"><h2>Подготовка предложений</h2><p class="panel-desc">Проверка готовности и предварительная калькуляция для отобранных лотов. Разница между бюджетом заказчика и себестоимостью не равна чистой прибыли — не учтены налоги, обеспечение заявки и прочие расходы.</p>'+ (rows||'<div class="empty"><strong>Пока нет лотов для предложения</strong>Перейдите в «Отбор» и отметьте интересные закупки.</div>')+'</section>';
+  }
+  function stageControl(){
+    var chosen=lots().filter(shortlist).sort(function(a,b){return String(a.deadline).localeCompare(String(b.deadline));});
+    var opts=function(l){return ["selected","preparing","submitted","won","lost"].map(function(x){return '<option value="'+x+'"'+(l.status===x?" selected":"")+'>'+statuses[x]+'</option>';}).join("");};
+    var rows=chosen.map(function(l){var left=daysUntil(l.deadline);return '<tr><td><div class="lot-name">'+esc(l.title)+'</div><div class="sub">'+esc(l.number)+'</div></td><td>'+currency(l.budget)+'</td><td>'+day(l.deadline)+'</td><td>'+(left<0?'<span class="tag red">Просрочено</span>':left<=7?'<span class="tag amber">'+left+' дн.</span>':'<span class="tag green">'+left+' дн.</span>')+'</td><td><select class="status-select" data-status-for="'+esc(l.id)+'">'+opts(l)+'</select></td></tr>';}).join("");
+    return '<section class="panel"><h2>Жизненный цикл заявок</h2><p class="panel-desc">Меняйте статус вручную. Сроки вычисляются от даты компьютера, уведомления и интеграция с ЭТП не работают.</p><div class="table-wrap"><table><thead><tr><th>Лот</th><th>Бюджет</th><th>Дедлайн</th><th>Осталось</th><th>Стадия</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+(rows?"":'<div class="empty"><strong>Контроль пока пуст</strong>Сначала отберите закупку для участия.</div>')+'</section><section class="panel"><h2>Резервная копия и перенос</h2><p class="panel-desc">Данные не синхронизируются между устройствами. Сохраните JSON перед очисткой браузера или переносом проекта.</p><div class="actions">'+btn("Скачать JSON","export-json","","btn-primary")+'<label class="btn btn-secondary" for="restore-json" style="cursor:pointer">Восстановить JSON</label><input type="file" id="restore-json" accept=".json,application/json" style="position:absolute;width:1px;height:1px;opacity:0"></div><p class="help">Восстановление заменяет текущие данные после подтверждения. Используйте только свои доверенные файлы.</p></section>';
+  }
+  function render(){root.innerHTML=sessionStorage.getItem(SESSION)==="yes"?shell():loginPage();}
+  function toast(t){var o=document.querySelector(".toast");if(o)o.remove();o=document.createElement("div");o.className="toast";o.setAttribute("role","status");o.textContent=t;document.body.appendChild(o);setTimeout(function(){if(o.parentElement)o.remove();},3500);}
+  function download(name,contents,mime){var url=URL.createObjectURL(new Blob(["\ufeff",contents],{type:mime}));var a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},2000);}
+  function cell(s){var v=String(s==null?"":s);if(/^[=+\-@\t\r]/.test(v))v="'"+v;return '"'+v.replace(/"/g,'""')+'"';}
+  function exportCsv(){var header=["number","title","customer","budget","deadline","source","status","estimated_cost","note"];var rows=lots().map(function(l){return [l.number,l.title,l.customer,l.budget,l.deadline,l.source,l.status,l.cost||"",l.note||""];});download("tenderBOLT-"+activeWs().id+".csv",[header.join(";")].concat(rows.map(function(row){return row.map(cell).join(";");})).join("\r\n"),"text/csv;charset=utf-8");toast("CSV подготовлен.");}
+  function parsedCsv(text) {
+    var all=[],row=[],v="",quoted=false,delimiter=text.split(/\r?\n/)[0].indexOf(";")>=0?";":",";
+    text=text.replace(/^\ufeff/,"");
+    for(var i=0;i<text.length;i++){var ch=text[i];if(ch==='"'){if(quoted&&text[i+1]==='"'){v+='"';i++;}else quoted=!quoted;}else if(ch===delimiter&&!quoted){row.push(v.trim());v="";}else if((ch==="\n"||ch==="\r")&&!quoted){if(ch==="\r"&&text[i+1]==="\n")i++;row.push(v.trim());if(row.some(Boolean))all.push(row);row=[];v="";}else{v+=ch;}}
+    if(quoted)throw new Error("Незакрытая кавычка в CSV");
+    row.push(v.trim());if(row.some(Boolean))all.push(row);
+    return all;
+  }
+  function doCsv(){var val=document.getElementById("csv-text");if(!val||!val.value.trim())return toast("Вставьте CSV с заголовками.");try{
+    var rows=parsedCsv(val.value),heads=rows.shift().map(function(x){return x.toLowerCase().trim();}),needed=["number","title","customer","budget","deadline","source"];
+    if(!needed.every(function(x){return heads.indexOf(x)>=0;}))throw new Error("Не найдены обязательные заголовки: "+needed.join(", "));
+    var made=0,skipped=0;
+    rows.slice(0,1000).forEach(function(r){var o={};needed.forEach(function(x){o[x]=(r[heads.indexOf(x)]||"").trim();});var money=Number(o.budget.replace(/\s/g,""));if(!o.number||!o.title||!o.customer||!o.source||!Number.isFinite(money)||money<0||money>1e12||!/^\d{4}-\d{2}-\d{2}$/.test(o.deadline)||isNaN(Date.parse(o.deadline))){skipped++;return;}
+      var duplicate=state.lots.some(function(l){return l.workspace===activeWs().id&&l.number===o.number;});if(duplicate){skipped++;return;}
+      state.lots.push({id:uid(),workspace:activeWs().id,number:o.number.slice(0,70),title:o.title.slice(0,250),customer:o.customer.slice(0,150),source:o.source.slice(0,80),budget:money,deadline:o.deadline,status:"new",cost:0,checks:{},note:"",demo:false});made++;
+    });save();ui.csvOpen=false;render();toast("Импортировано: "+made+"; пропущено: "+skipped+(rows.length>1000?"; максимум 1000 строк":"")+".");
+    }catch(e){toast("Ошибка импорта: "+e.message);}
+  }
+  root.addEventListener("click",function(e){
+    var b=e.target.closest("[data-action]");if(!b)return;var action=b.dataset.action,id=b.dataset.id,l=id?lotById(id):null;
+    if(action==="logout"){sessionStorage.removeItem(SESSION);ui.loginError="";render();return;}
+    if(action==="stage"){ui.stage=Number(b.dataset.stage);ui.query="";ui.status="all";render();return;}
+    if(action==="goto-lots"){ui.stage=1;render();return;}
+    if(action==="new-workspace"){var n=prompt("Название нового рабочего пространства (до 60 символов):");if(!n)return;n=n.trim().slice(0,60);if(!n)return;var w={id:"w"+Date.now().toString(36),name:n,keywords:"",minBudget:0,maxBudget:0};state.workspaces.push(w);state.activeWorkspace=w.id;save();ui.stage=0;render();toast("Пространство создано.");return;}
+    if(action==="toggle-add"){ui.addOpen=!ui.addOpen;render();return;}
+    if(action==="toggle-csv"){ui.csvOpen=!ui.csvOpen;render();return;}
+    if(action==="reset-search"){ui.query="";ui.status="all";render();return;}
+    if(action==="import-csv"){doCsv();return;}
+    if(action==="export-csv"){exportCsv();return;}
+    if(action==="export-json"){download("tenderBOLT-backup.json",JSON.stringify(state,null,2),"application/json;charset=utf-8");toast("Резервная копия подготовлена.");return;}
+    if(!l)return;
+    if(action==="select")l.status="selected";
+    if(action==="reject")l.status="rejected";
+    if(action==="reset")l.status="new";
+    if(action==="note"){var t=prompt("Комментарий к лоту:",l.note||"");if(t===null)return;l.note=t.slice(0,700);}
+    save();render();
+  });
+  root.addEventListener("submit",function(e){
+    var f=e.target,form=f.dataset.form;if(!form)return;e.preventDefault();var d=new FormData(f);
+    if(form==="login"){if(String(d.get("email")||"").trim().toLowerCase()===DEMO_USER&&d.get("password")===DEMO_PASS){sessionStorage.setItem(SESSION,"yes");ui.loginError="";render();toast("Вы вошли в демонстрационное пространство.");}else{ui.loginError="Неверные демо-реквизиты.";render();}return;}
+    if(form==="search"){ui.query=String(d.get("query")||"").trim();ui.status=String(d.get("status")||"all");render();return;}
+    if(form==="criteria"){var w=activeWs(),min=Number(d.get("minBudget")),max=Number(d.get("maxBudget"));if(min<0||max<0||(max>0&&max<min))return toast("Проверьте диапазон бюджетов.");w.keywords=String(d.get("keywords")||"").slice(0,700);w.minBudget=min;w.maxBudget=max;save();render();toast("Критерии сохранены.");return;}
+    if(form==="add-lot"){var obj={};["number","source","title","customer","deadline"].forEach(function(k){obj[k]=String(d.get(k)||"").trim();});obj.budget=Number(d.get("budget"));if(!obj.number||!obj.title||!obj.customer||!obj.source||!obj.deadline||!Number.isFinite(obj.budget)||obj.budget<0)return toast("Заполните корректно все поля.");if(state.lots.some(function(l){return l.workspace===activeWs().id&&l.number===obj.number;}))return toast("Лот с таким номером уже есть.");state.lots.push(Object.assign(obj,{id:uid(),workspace:activeWs().id,status:"new",cost:0,note:"",checks:{},demo:false}));save();ui.addOpen=false;render();toast("Лот добавлен.");return;}
+    if(form==="quote"){var l=lotById(f.dataset.id);if(!l)return;var cost=Number(d.get("cost"));if(!Number.isFinite(cost)||cost<0||cost>1e12)return toast("Некорректная себестоимость.");l.cost=cost;save();render();toast("Калькуляция сохранена.");}
+  });
+  root.addEventListener("change",function(e){
+    var el=e.target;if(el.id==="workspace"){state.activeWorkspace=el.value;save();ui.query="";ui.status="all";render();return;}
+    if(el.hasAttribute("data-source")){var source=state.sources.find(function(s){return s.id===el.dataset.source;});if(source){source.enabled=el.checked;save();render();toast("Настройка сохранена. Автосбор не запущен.");}return;}
+    if(el.hasAttribute("data-status-for")){var l=lotById(el.dataset.statusFor);if(l&&["selected","preparing","submitted","won","lost"].includes(el.value)){l.status=el.value;save();render();}return;}
+    if(el.hasAttribute("data-check")){var lot=lotById(el.dataset.id);if(lot){lot.checks=lot.checks||{};lot.checks[el.dataset.check]=el.checked;save();}return;}
+    if(el.id==="restore-json"&&el.files&&el.files[0]){var file=el.files[0];if(file.size>3e6){toast("Файл слишком большой (макс. 3 МБ).");return;}var reader=new FileReader();reader.onload=function(){try{var next=JSON.parse(String(reader.result));if(!next||!Array.isArray(next.lots)||!Array.isArray(next.workspaces)||!next.workspaces.length||!Array.isArray(next.sources)||next.lots.length>10000)throw new Error("Неверный формат резервной копии.");if(!confirm("Заменить ВСЕ локальные данные импортированным JSON?"))return;state=next;state.activeWorkspace=activeWs().id;save();render();toast("Резервная копия восстановлена.");}catch(err){toast("Не удалось восстановить JSON: "+err.message);}};reader.readAsText(file);}
+  });
+  render();
+})();

@@ -47,7 +47,7 @@ assert.match(root.innerHTML, /Тендерный портфель/);
 assert.match(root.innerHTML, /DEMO-2026-0124/);
 
 location.hash = "#project:TB-000124"; events.hashchange();
-assert.match(root.innerHTML, /Карточка проекта/);
+assert.match(root.innerHTML, /КАРТОЧКА ПРОЕКТА/);
 assert.match(root.innerHTML, /Обогащение|обогащение/);
 assert.match(root.innerHTML, /Ключевые требования/);
 
